@@ -570,15 +570,17 @@ elif step == 5:
         st.code(full_prompt_payload, language="text")
 
     final_answer, telemetry = synthesize_grounded_answer(api_key, query, retrieved)
-
-    st.markdown("#### ✅ Final Grounded RAG Output")
+   st.markdown("#### ✅ Final Grounded RAG Output")
     t1, t2, t3 = st.columns(3)
     t1.metric("Execution Engine", telemetry["mode"])
     t2.metric("Generation Latency", f"{telemetry['latency_ms']} ms")
     t3.metric("Context + Output Tokens", telemetry["tokens_used"])
 
+    # Dedicated User Question text box followed by the Grounded Output
+    st.text_input("User Question:", value=query, disabled=True)
+    st.markdown("**Grounded Answer:**")
     st.success(final_answer)
-
+    
     audit_report = (
         f"# GlassBox AI — Behavioral RAG Audit Report\n\n"
         f"**Question:** {query}\n\n"
