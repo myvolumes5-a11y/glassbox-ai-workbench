@@ -570,7 +570,7 @@ elif step == 5:
         st.code(full_prompt_payload, language="text")
 
     final_answer, telemetry = synthesize_grounded_answer(api_key, query, retrieved)
-   st.markdown("#### ✅ Final Grounded RAG Output")
+    st.markdown("#### ✅ Final Grounded RAG Output")
     t1, t2, t3 = st.columns(3)
     t1.metric("Execution Engine", telemetry["mode"])
     t2.metric("Generation Latency", f"{telemetry['latency_ms']} ms")
