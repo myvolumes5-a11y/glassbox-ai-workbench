@@ -1,9 +1,11 @@
+import re
+import pandas as pd
 import streamlit as st
 from pypdf import PdfReader
 
 # 1. Configure browser tab title, icon, and full-width layout
 st.set_page_config(
-    page_title="GlassBox AI — RAG Wizard (Behavioural Analysis)",
+    page_title="GlassBox AI — Behavioral RAG Wizard",
     page_icon="🧠",
     layout="wide",
 )
@@ -99,33 +101,33 @@ step = st.session_state.rag_step
 if step == 1:
     st.subheader("Step 1: Load Behavioral Psychology Docs or Upload a PDF")
     st.write(
-        "Select pre-loaded open-source behavioral psychology modules (adapted from OpenStax Psychology 2e, CC BY) "
-        "or upload any open-source `.pdf` / `.txt` file on human behavior, personality traits, or nonverbal cues."
+        "Select pre-loaded behavioral psychology reference modules or upload any open-access "
+        "`.pdf` / `.txt` file on human behavior, personality traits, or nonverbal cues."
     )
 
     DEFAULT_DOCS = {
-        "Big_Five_OCEAN_Traits.pdf (OpenStax Psych 2e)": (
+        "Big_Five_OCEAN_Traits.txt": (
             "[Page 1] The Five Factor Model (OCEAN) measures five core personality dimensions on a continuum: "
             "Openness to experience (imagination, curiosity, openness to new ideas), Conscientiousness (competence, "
             "self-discipline, thoughtfulness, goal-driven behavior), Extraversion (sociability, assertiveness, emotional "
             "expression), Agreeableness (cooperative, trustworthy, good-natured), and Neuroticism (tendency toward "
             "unstable emotions, anxiety, and stress reactivity). High conscientiousness strongly predicts workplace reliability."
         ),
-        "Nonverbal_Kinesics_&_Pacifiers.pdf (Behavioral Guide)": (
+        "Nonverbal_Kinesics_Pacifiers.txt": (
             "[Page 1] Accurate body language analysis requires establishing a person's baseline behavior first and "
             "evaluating clusters of gestures rather than single isolated movements. Pacifying behaviors—such as neck "
             "touching, lip compression, self-hugging, or repetitive foot tapping—reflect autonomic nervous system arousal "
             "and psychological discomfort or stress, not definitive proof of deception. Ventral fronting (angling the "
             "torso and feet toward a speaker) signals genuine engagement and psychological comfort."
         ),
-        "Social_Influence_&_Cognitive_Bias.pdf (OpenStax Psych 2e)": (
+        "Social_Influence_Cognitive_Bias.txt": (
             "[Page 1] Fundamental Attribution Error occurs when observers overemphasize internal personality traits and "
             "underestimate situational factors when explaining another person's behavior. In contrast, the Actor-Observer "
             "Bias leads individuals to attribute their own mistakes to external circumstances while blaming others' "
             "mistakes on character flaws. Cognitive dissonance arises when actions conflict with core self-beliefs, "
             "prompting rationalization."
         ),
-        "HEXACO_Honesty_Humility_Model.pdf (Trait Research)": (
+        "HEXACO_Honesty_Humility.txt": (
             "[Page 1] The HEXACO model expands the Big Five by adding a sixth factor: Honesty-Humility, encompassing "
             "sincerity, fairness, greed avoidance, and modesty. Individuals scoring low on Honesty-Humility are more "
             "likely to manipulate others for personal gain, feel entitled to special treatment, and bend ethical rules "
@@ -140,12 +142,11 @@ if step == 1:
     )
 
     uploaded_file = st.file_uploader(
-        "Or upload an open-source PDF / TXT file (e.g., OpenStax Psychology 2e chapter):",
+        "Or upload an open-source PDF / TXT file:",
         type=["pdf", "txt"],
     )
 
     active_docs = {name: DEFAULT_DOCS[name] for name in selected_names}
-    pdf_pages_loaded = 0
 
     if uploaded_file is not None:
         if uploaded_file.name.lower().endswith(".pdf"):
@@ -172,20 +173,113 @@ if step == 1:
     else:
         for doc_name, content in active_docs.items():
             with st.expander(f"📄 {doc_name} — {len(content):,} characters", expanded=True):
-                # Preview first 1,200 chars cleanly if a huge PDF is uploaded
-                preview = content if len(content) <= 1200 else content[:1200] + "\n\n... [truncated preview — full text passed to Step 2]"
+                preview = (
+                    content
+                    if len(content) <= 1200
+                    else content[:1200] + "\n\n... [truncated preview — full text passed to Step 2]"
+                )
                 st.write(preview)
 
     render_wizard_nav(total_steps=len(RAG_STEPS), can_proceed=len(active_docs) > 0)
 
 # =========================================================
-# STEP 2 PLACEHOLDER (NEXT LESSON)
+# STEP 2: SLIDING-WINDOW TEXT CHUNKING & OVERLAP
 # =========================================================
 elif step == 2:
-    st.subheader("Step 2: Text Chunking & Overlap (Next Lesson)")
-    loaded_docs = st.session_state.rag_data.get("docs", {})
-    st.info(
-        f"Ready for chunking! Step 1 passed **{len(loaded_docs)} source(s)** "
-        f"({sum(len(t.split()) for t in loaded_docs.values()):,} words) into `st.session_state.rag_data['docs']`."
+    st.subheader("Step 2: Sliding-Window Text Chunking & Overlap")
+    st.write(
+        "Adjust **Chunk Size** and **Chunk Overlap** below to watch how your documents split into "
+        "searchable passages while preserving context across chunk boundaries."
     )
+
+    docs = st.session_state.rag_data.get("docs", {})
+
+    # Interactive Hyperparameter Controls
+    col1, col2 = st.columns(2)
+    chunk_size = col1.slider(
+        "Chunk Size (characters per chunk):",
+        min_value=120,
+        max_value=500,
+        value=240,
+        step=20,
+    )
+    overlap = col2.slider(
+        "Chunk Overlap (shared characters between neighbors):",
+        min_value=0,
+        max_value=120,
+        value=50,
+        step=10,
+    )
+
+    # Guardrail: overlap must always be smaller than chunk_size
+    effective_overlap = min(overlap, chunk_size - 20)
+    stride = chunk_size - effective_overlap
+
+    chunks = []
+    for doc_name, text in docs.items():
+        start = 0
+        chunk_num = 1
+        while start < len(text):
+            piece = text[start : start + chunk_size].strip()
+            if piece:
+                # Track the most recent [Page N] marker seen up to this slice
+                page_matches = re.findall(r"\[Page (\d+)\]", text[: start + chunk_size])
+                page_label = f"Page {page_matches[-1]}" if page_matches else "Page 1"
+
+                chunks.append(
+                    {
+                        "chunk_id": f"{doc_name.split('.')[0]}#C{chunk_num}",
+                        "source": doc_name,
+                        "page": page_label,
+                        "chars": len(piece),
+                        "text": piece,
+                    }
+                )
+                chunk_num += 1
+
+            # Stop once the window reaches the end of the document
+            if start + chunk_size >= len(text):
+                break
+            start += stride
+
+    # Save generated chunks into session_state for Step 3
+    st.session_state.rag_data["chunks"] = chunks
+
+    # Glass-Box Output Inspection
+    st.markdown("#### 🔍 Step 2 Output Inspection (Chunked Corpus)")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Chunks Generated", len(chunks))
+    avg_chars = round(sum(c["chars"] for c in chunks) / len(chunks)) if chunks else 0
+    m2.metric("Avg. Chunk Length", f"{avg_chars} chars")
+    m3.metric("Window Stride", f"{stride} chars / step")
+
+    # Visual Proof of Overlap between Chunk 1 and Chunk 2 of the first document
+    if len(chunks) >= 2 and chunks[0]["source"] == chunks[1]["source"] and effective_overlap > 0:
+        shared_tail = chunks[0]["text"][-effective_overlap:]
+        with st.expander("🔗 Visual Proof: How Overlap Bridges Chunk #1 and Chunk #2", expanded=True):
+            st.caption(
+                f"Notice how the last ~{effective_overlap} characters of **{chunks[0]['chunk_id']}** repeat at the "
+                f"beginning of **{chunks[1]['chunk_id']}** so sentences aren't severed:"
+            )
+            c_left, c_right = st.columns(2)
+            c_left.info(f"**{chunks[0]['chunk_id']} (End):**\n\n...{chunks[0]['text'][-110:]}")
+            c_right.success(f"**{chunks[1]['chunk_id']} (Start):**\n\n{chunks[1]['text'][:110]}...")
+            st.code(f"Shared Overlap Bridge: \"{shared_tail}\"", language="text")
+
+    # Full Searchable Chunk Table
+    st.dataframe(
+        pd.DataFrame(chunks),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    render_wizard_nav(total_steps=len(RAG_STEPS), can_proceed=len(chunks) > 0)
+
+# =========================================================
+# STEP 3 PLACEHOLDER (NEXT LESSON)
+# =========================================================
+elif step == 3:
+    st.subheader("Step 3: Vector Embeddings & Semantic Space (Next Lesson)")
+    chunk_count = len(st.session_state.rag_data.get("chunks", []))
+    st.info(f"Success! Step 2 passed **{chunk_count} chunks** into `st.session_state.rag_data['chunks']`.")
     render_wizard_nav(total_steps=len(RAG_STEPS), can_proceed=False)
