@@ -85,7 +85,7 @@ def extract_pdf_text(uploaded_pdf) -> tuple[str, int]:
     return "\n\n".join(pages_text), len(reader.pages)
 
 
-# 4. Semantic Embedding Engine (14-Dimensional Unit Vectors)
+# 4. Semantic Embedding Engine (12-Dimensional Unit Vectors)
 CONCEPT_AXES = [
     ("OCEAN_Traits", ["ocean", "five", "personality", "openness", "extraversion", "agreeableness", "trait", "traits"]),
     ("Conscientiousness", ["conscientiousness", "discipline", "reliability", "workplace", "goal", "competence"]),
@@ -109,27 +109,20 @@ STOPWORDS = {
 
 
 def compute_embedding(text: str) -> list[float]:
-    """
-    Maps text into a 12-dimensional L2-normalized semantic vector:
-    - Dimensions 0..7 capture behavioral psychology & nonverbal concept axes.
-    - Dimensions 8..11 capture general lexical token hashes (so custom PDFs also embed accurately).
-    """
+    """Maps text into a 12-dimensional L2-normalized semantic vector."""
     words = [w for w in re.findall(r"[a-z]{3,}", text.lower()) if w not in STOPWORDS]
     raw_vec = [0.0] * len(CONCEPT_AXES)
 
-    # Score semantic concept axes
     for idx in range(8):
         axis_keywords = CONCEPT_AXES[idx][1]
         for w in words:
             if w in axis_keywords:
                 raw_vec[idx] += 1.5
 
-    # Score general hashed token buckets (supports any custom uploaded PDF)
     for w in words:
         bucket = 8 + (sum(ord(ch) for ch in w) % 4)
         raw_vec[bucket] += 0.35
 
-    # L2 Normalization so vector magnitude = 1.0 (enables pure dot-product cosine similarity)
     norm = math.sqrt(sum(v * v for v in raw_vec)) or 1.0
     return [round(v / norm, 4) for v in raw_vec]
 
@@ -145,10 +138,7 @@ def synthesize_grounded_answer(
     query: str,
     retrieved_chunks: list[dict],
 ) -> tuple[str, dict]:
-    """
-    Generates a strictly grounded answer from retrieved chunks.
-    Uses OpenAI gpt-4o-mini if an API key is provided; otherwise builds a deterministic cited synthesis.
-    """
+    """Generates a strictly grounded answer from retrieved chunks."""
     start_time = time.perf_counter()
 
     if not retrieved_chunks:
@@ -194,12 +184,10 @@ def synthesize_grounded_answer(
                 "tokens_used": total_tokens,
             }
         except Exception as exc:
-            # Graceful fallback if key is invalid or quota exceeded
             api_error_note = f"> *Note: OpenAI API call fell back to Zero-Key Synthesis ({exc})*\n\n"
     else:
         api_error_note = ""
 
-    # Zero-Key Deterministic Grounded Synthesis (extracts best-matching sentences + exact citations)
     query_terms = {w for w in re.findall(r"[a-z]{3,}", query.lower()) if w not in STOPWORDS}
     cited_points = []
     unique_sources = []
@@ -210,11 +198,14 @@ def synthesize_grounded_answer(
         if not sentences:
             sentences = [clean_passage]
 
-        # Rank sentences inside the chunk by query term overlap
         best_sent = max(
             sentences,
             key=lambda s: len(query_terms & set(re.findall(r"[a-z]{3,}", s.lower()))),
         )
+        # Capitalize cleanly if a chunk began mid-sentence after an overlap boundary
+        if best_sent and best_sent[0].islower():
+            best_sent = best_sent[0].upper() + best_sent[1:]
+
         citation = f"`{chunk['source']} ({chunk['page']})`"
         cited_points.append(f"- {best_sent} — *Source: {citation}*")
         if citation not in unique_sources:
@@ -249,7 +240,8 @@ with st.sidebar:
         st.info("Zero-Key Demo Mode Active")
 
     st.markdown("---")
-    
+    st.markdown("**Architect:** Fatma Masooma Nigar")
+    st.markdown("Project Consultant – AI/ML & Data Analysis")
     if st.button("🔄 Reset Entire Wizard", use_container_width=True):
         reset_wizard()
         st.rerun()
@@ -354,13 +346,13 @@ if step == 1:
     render_wizard_nav(total_steps=len(RAG_STEPS), can_proceed=len(active_docs) > 0)
 
 # =========================================================
-# STEP 2: SLIDING-WINDOW TEXT CHUNKING & OVERLAP
+# STEP 2: WORD-BOUNDARY SLIDING-WINDOW CHUNKING & OVERLAP
 # =========================================================
 elif step == 2:
-    st.subheader("Step 2: Sliding-Window Text Chunking & Overlap")
+    st.subheader("Step 2: Word-Boundary Text Chunking & Overlap")
     st.write(
-        "Adjust **Chunk Size** and **Chunk Overlap** below to watch how your documents split into "
-        "searchable passages while preserving context across chunk boundaries."
+        "Adjust **Chunk Size** and **Chunk Overlap** below. Notice how boundary snapping aligns cuts to "
+        "whole words so words are never sliced in half across chunk edges."
     )
 
     docs = st.session_state.rag_data.get("docs", {})
@@ -370,16 +362,23 @@ elif step == 2:
     overlap = col2.slider("Chunk Overlap (shared characters between neighbors):", 0, 120, 50, 10)
 
     effective_overlap = min(overlap, chunk_size - 20)
-    stride = chunk_size - effective_overlap
 
     chunks = []
     for doc_name, text in docs.items():
         start = 0
         chunk_num = 1
         while start < len(text):
-            piece = text[start : start + chunk_size].strip()
+            end = min(len(text), start + chunk_size)
+
+            # 1. Snap end backward to nearest space so we never cut a word in half
+            if end < len(text):
+                last_space = text.rfind(" ", start + 40, end)
+                if last_space != -1:
+                    end = last_space
+
+            piece = text[start:end].strip()
             if piece:
-                page_matches = re.findall(r"\[Page (\d+)\]", text[: start + chunk_size])
+                page_matches = re.findall(r"\[Page (\d+)\]", text[:end])
                 page_label = f"Page {page_matches[-1]}" if page_matches else "Page 1"
 
                 chunks.append(
@@ -393,18 +392,25 @@ elif step == 2:
                 )
                 chunk_num += 1
 
-            if start + chunk_size >= len(text):
+            if end >= len(text):
                 break
-            start += stride
+
+            # 2. Compute next start with overlap, snapping forward to a whole-word boundary
+            next_start = max(start + 20, end - effective_overlap)
+            if next_start > 0 and not text[next_start - 1].isspace():
+                next_space = text.find(" ", next_start, end)
+                if next_space != -1:
+                    next_start = next_space + 1
+            start = next_start
 
     st.session_state.rag_data["chunks"] = chunks
 
-    st.markdown("#### 🔍 Step 2 Output Inspection (Chunked Corpus)")
+    st.markdown("#### 🔍 Step 2 Output Inspection (Word-Aligned Chunks)")
     m1, m2, m3 = st.columns(3)
     m1.metric("Total Chunks Generated", len(chunks))
     avg_chars = round(sum(c["chars"] for c in chunks) / len(chunks)) if chunks else 0
     m2.metric("Avg. Chunk Length", f"{avg_chars} chars")
-    m3.metric("Window Stride", f"{stride} chars / step")
+    m3.metric("Boundary Mode", "Whole-Word Snapped")
 
     if len(chunks) >= 2 and chunks[0]["source"] == chunks[1]["source"] and effective_overlap > 0:
         shared_tail = chunks[0]["text"][-effective_overlap:]
@@ -451,7 +457,6 @@ elif step == 3:
     v2.metric("Embedding Dimensions", len(CONCEPT_AXES))
     v3.metric("Distance Metric", "Cosine Similarity")
 
-    # Interactive Single-Chunk Vector Visualizer
     if indexed_chunks:
         selected_id = st.selectbox(
             "Inspect the numerical vector coordinates of a specific chunk:",
@@ -464,7 +469,6 @@ elif step == 3:
         vec_df = pd.DataFrame({"Semantic Dimension": axis_labels, "Activation Weight": chosen["vector"]})
         st.bar_chart(vec_df.set_index("Semantic Dimension"), height=220)
 
-    # Full Vector Index Table
     display_df = pd.DataFrame(indexed_chunks)[["chunk_id", "source", "page", "l2_norm", "vector_preview"]]
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
@@ -502,17 +506,14 @@ elif step == 4:
     top_k = col_k.slider("Top-K Chunks to Retrieve:", min_value=1, max_value=max_k, value=min(3, max_k))
     min_score = col_thresh.slider("Minimum Cosine Similarity Threshold:", 0.0, 0.80, 0.25, 0.05)
 
-    # Embed the user query and score every chunk
     query_vec = compute_embedding(query)
     scored_chunks = []
     for item in indexed_chunks:
         sim = cosine_similarity(query_vec, item["vector"])
         scored_chunks.append({**item, "similarity_score": sim})
 
-    # Sort descending by cosine similarity
     ranked_all = sorted(scored_chunks, key=lambda x: x["similarity_score"], reverse=True)
 
-    # Apply Top-K and Threshold filters
     retrieved = [c for c in ranked_all[:top_k] if c["similarity_score"] >= min_score]
     for idx, row in enumerate(ranked_all, start=1):
         row["rank"] = idx
@@ -551,7 +552,6 @@ elif step == 5:
     query = st.session_state.rag_data.get("query", "")
     retrieved = st.session_state.rag_data.get("retrieved", [])
 
-    # Build the exact prompt payload for transparent Glass-Box inspection
     if retrieved:
         injected_context = "\n\n".join(
             [f"[{c['source']} | {c['page']} | Score={c['similarity_score']}]\n{c['text']}" for c in retrieved]
@@ -570,7 +570,6 @@ elif step == 5:
     with st.expander("🔍 Inspect Exact Prompt Payload Sent to Generator", expanded=True):
         st.code(full_prompt_payload, language="text")
 
-    # Generate final answer + telemetry
     final_answer, telemetry = synthesize_grounded_answer(api_key, query, retrieved)
 
     st.markdown("#### ✅ Final Grounded RAG Output")
@@ -581,7 +580,6 @@ elif step == 5:
 
     st.success(final_answer)
 
-    # Allow downloading the full RAG audit trace as Markdown
     audit_report = (
         f"# GlassBox AI — Behavioral RAG Audit Report\n\n"
         f"**Question:** {query}\n\n"
