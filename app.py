@@ -249,7 +249,7 @@ with st.sidebar:
         st.info("Zero-Key Demo Mode Active")
 
     st.markdown("---")
-    st.markdown("**Architect:** Fatma Masooma Nigar")
+    st.markdown("**Architect:** myvolumes5")
     st.markdown("Project Consultant – AI/ML & Data Analysis")
     if st.button("🔄 Reset Entire Wizard", use_container_width=True):
         reset_wizard()
