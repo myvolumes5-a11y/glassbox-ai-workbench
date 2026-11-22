@@ -6,6 +6,9 @@ Instead of hiding AI behavior behind a black-box chat window, each track walks u
 `< Back`, `Next >`, and `Cancel` wizard navigation:
 
 1. **RAG Pipeline Wizard:** Document selection → Overlapping text chunking → Dense vector embeddings & ChromaDB indexing → Top-K cosine similarity retrieval → Context-grounded prompt & cited answer.
+## Data & Licensing
+- Built-in behavioral psychology and kinesics reference modules are original educational summaries created for this workbench.
+- User-uploaded PDFs are processed transiently in browser session memory and are not stored on disk. If testing with open-access textbooks such as OpenStax *Psychology 2e* (CC BY-NC-SA 4.0, free at https://openstax.org), please adhere to the source document's attribution and non-commercial terms.
 2. **LLM Mechanics Wizard:** System/User prompt configuration → Tokenization & cost breakdown → Low vs. high temperature decoding comparison → Guardrail validation → Final telemetry.
 3. **Generative AI Studio Wizard:** Artifact selection → Enforced JSON schema → Structured synthesis → Quality & word-count audit → Downloadable Markdown export.
 4. **Agentic AI Workflow Wizard:** Multi-step goal definition → Planner task decomposition → Deterministic Python tool execution trace → Critic reflection check → Executive decision brief.
